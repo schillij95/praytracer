@@ -8,21 +8,33 @@ from multiprocessing import sharedctypes
 
 
 class Triangle:
-    def __init__(self, vertices, normal)
-        pass
+    def __init__(self, vertices, normal):
+        self.vertices = vertices
+        self.normal = normal
 
     def intersect(self, ray):
-        a = self.vertices[0].x-self.vertices[1].x
-        b = self.vertices[0].y-self.vertices[1].y
-        c = self.vertices[0].z-self.vertices[1].z
+        a = self.vertices[0][0]-self.vertices[1][0]
+        b = self.vertices[0][1]-self.vertices[1][1]
+        c = self.vertices[0][2]-self.vertices[1][2]
 
-        d = self.vertices[0].x-self.vertices[2].x
-        e = self.vertices[0].y-self.vertices[2].y
-        f = self.vertices[0].z-self.vertices[2].z
+        d = self.vertices[0][0]-self.vertices[2][0]
+        e = self.vertices[0][1]-self.vertices[2][1]
+        f = self.vertices[0][2]-self.vertices[2][2]
 
         g = ray.direction[0]
         h = ray.direction[1]
         i = ray.direction[2]
+        
+        j = self.vertices[0][0] - ray.origin[0]
+        k = self.vertices[0][1] - ray.origin[1]
+        l = self.vertices[0][2] - ray.origin[2]
+        
+        M = a*(e*i - h*f) + b*(g*f - d*i) + c*(d*h + e*g)
+        t = -(f*(a*k - j*b) + e*(j*c - a*l) + d*(b*l - k*c)) / M
+        gamma = (i*(a*k - j*b) + h*(j*c - a*l) + g*(b*l - k*c)) / M
+        beta = (j*(e*i - h*f) + k*(g*f - d*i) + l*(d*h - e*g)) / M
+
+        return t, gamma, beta
 
 
 class Sphere:
@@ -37,11 +49,12 @@ class Sphere:
         self.CO = None
         self.rsq = self.radius * self.radius
     
-    def intersect(self, a, ray):
+    def intersect(self, ray):
         if self.CO is None:
             self.CO = ray.origin - self.center
             self.COdotCO = np.dot(self.CO, self.CO)
-            
+
+        a = np.dot(ray.direction, ray.direction)
         b = 2 * np.dot(self.CO, ray.direction)
         c = self.COdotCO - self.rsq
 
@@ -215,7 +228,7 @@ def render_scene(scene, resolution, out_file):
     shader = phong_shadow_shader
 
     pixels = [(x, y) for x in range(-width//2, width//2) for y in range(-height//2, height//2)]
-    rate = 2 
+    rate = 1 
     
     def render(pixels):
         tmp = np.ctypeslib.as_array(shared_array)
@@ -251,18 +264,26 @@ def intersect_ray(scene, origin, direction, t_min=1, t_max=math.inf):
     closest_distance = math.inf
     closest_object = None
 
-    a = np.dot(ray.direction, ray.direction)
-
     for obj in scene.objects:
-        t1, t2 = obj.intersect(a, ray)
+        if isinstance(obj, Sphere):
+            t1, t2 = obj.intersect(ray)
 
-        if t1 is not None and t1 < closest_distance and t_max >= t1 >= t_min:
-            closest_distance = t1
-            closest_object = obj
+            if t1 is not None and t1 < closest_distance and t_max >= t1 >= t_min:
+                closest_distance = t1
+                closest_object = obj
 
-        if t2 is not None and t2 < closest_distance and t_max >= t2 >= t_min:
-            closest_distance = t2
-            closest_object = obj
+            if t2 is not None and t2 < closest_distance and t_max >= t2 >= t_min:
+                closest_distance = t2
+                closest_object = obj
+        else:
+            t, gamma, beta = obj.intersect(ray)
+            if t_max > t > t_min:
+               if 1 > gamma > 0:
+                    if 1 - gamma > beta > 0: 
+                        if t < closest_distance:
+                            print(t, gamma, beta)
+                            closest_distance = t
+                            closest_object = obj
     
     return closest_object, closest_distance, ray
 
@@ -270,16 +291,17 @@ def intersect_ray(scene, origin, direction, t_min=1, t_max=math.inf):
 def intersect_any(scene, origin, direction, t_min=1, t_max=math.inf):
     ray = Ray(origin=origin, direction=direction)
 
-    a = np.dot(ray.direction, ray.direction)
-
     for obj in scene.objects:
-        t1, t2 = obj.intersect(a, ray)
+        if isinstance(obj, Sphere):
+            t1, t2 = obj.intersect(ray)
 
-        if t1 is not None and t_max >= t1 >= t_min:
-            return True
+            if t1 is not None and t_max >= t1 >= t_min:
+                return True
 
-        if t2 is not None and t_max >= t2 >= t_min:
-            return True
+            if t2 is not None and t_max >= t2 >= t_min:
+                return True
+        else:
+            pass
     
     return False
 
@@ -287,9 +309,7 @@ def intersect_any(scene, origin, direction, t_min=1, t_max=math.inf):
 def intersect_object(obj, origin, direction, t_min=1, t_max=math.inf):
     ray = Ray(origin=origin, direction=direction)
 
-    a = np.dot(ray.direction, ray.direction)
-
-    t1, t2 = obj.intersect(a, ray)
+    t1, t2 = obj.intersect(ray)
 
     if t1 is not None and t_max >= t1 >= t_min:
         intersection = ray.origin + t1 * ray.direction
@@ -302,21 +322,21 @@ def intersect_object(obj, origin, direction, t_min=1, t_max=math.inf):
     return None
 
 
-def lookup_ray(shader, camera, x, y, world_coords, scene):
-    max_dist = 10
-
-    for i in range(1, 10):
-        for n in range(-i, i):
-            f, g = x+n, y
-                
-            if (f, g) in scene.hit_lookup:
-                obj = scene.hit_lookup[(f, g)]
-                a = intersect_object(obj, camera, world_coords)
-                if a is not None:
-                   ray, intersection = a
-                   return shader(scene, ray, intersection, obj)
-            else:
-                trace_ray(shader, camera, x, y, world_coords, scene)
+# def lookup_ray(shader, camera, x, y, world_coords, scene):
+#     max_dist = 10
+# 
+#     for i in range(1, 10):
+#         for n in range(-i, i):
+#             f, g = x+n, y
+#                 
+#             if (f, g) in scene.hit_lookup:
+#                 obj = scene.hit_lookup[(f, g)]
+#                 a = intersect_object(obj, camera, world_coords)
+#                 if a is not None:
+#                    ray, intersection = a
+#                    return shader(scene, ray, intersection, obj)
+#             else:
+#                 trace_ray(shader, camera, x, y, world_coords, scene)
     
 
 def trace_ray(shader, camera, x, y, world_coords, scene):
@@ -330,7 +350,7 @@ def trace_ray(shader, camera, x, y, world_coords, scene):
 
     r = closest_object.reflective
     if closest_object.reflective <= 0:
-        scene.hit_lookup[(x, y)] = closest_object
+        # scene.hit_lookup[(x, y)] = closest_object
         return local_color
     else:
         for i in range(2):
@@ -369,23 +389,25 @@ if __name__ == '__main__':
                 ]
 
     objects = [
-               Sphere(center=np.array([0, -1, 3]), 
-                      radius=1, 
-                      color=np.array([255, 0, 0]),
-                      specular=500,
-                      reflective=0.0),
-               Sphere(center=np.array([2, 0, 4]), 
-                      radius=1, 
-                      color=np.array([0, 0, 255]),
-                      specular=500, reflective=0.0),
-               Sphere(center=np.array([-2, 0, 4]), 
-                      radius=1, 
-                      color=np.array([0, 255, 0]),
-                      specular=10),
-               Sphere(center=np.array([0, -5001, 0]), 
-                      radius=5000, 
-                      color=np.array([255, 255, 0]),
-                      specular=1000),
+               # Sphere(center=np.array([0, -1, 3]), 
+               #        radius=1, 
+               #        color=np.array([255, 0, 0]),
+               #        specular=500,
+               #        reflective=0.0),
+               # Sphere(center=np.array([2, 0, 4]), 
+               #        radius=1, 
+               #        color=np.array([0, 0, 255]),
+               #        specular=500, reflective=0.0),
+               # Sphere(center=np.array([-2, 0, 4]), 
+               #        radius=1, 
+               #        color=np.array([0, 255, 0]),
+               #        specular=10),
+               # Sphere(center=np.array([0, -5001, 0]), 
+               #        radius=5000, 
+               #        color=np.array([255, 255, 0]),
+               #        specular=1000),
+               Triangle(vertices=[np.array([0, 3, 0]), np.array([0, 3, 3]), np.array([-1, 3, 1])],
+                        normal=np.array([5, 5, 5])),
     ]
 
     scene = Scene(objects, lightning)
