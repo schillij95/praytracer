@@ -5,7 +5,17 @@ from PIL import Image
 from multiprocessing import Pool
 from multiprocessing import Process
 from multiprocessing import sharedctypes
+class Point:
+    def __init__(self, x, y, z):
+	self.x = x
+	self.y = y
+	self.z = z
 
+    def add(self, other):
+	return Point(self.x + other.x, self.y + other.y, self.z + other.z)
+
+    def sub(self, other):
+	return Point(self.x - other.x, self.y - other.y, self.z - other.z)
 
 class Triangle:
     def __init__(self, vertices, normal):
